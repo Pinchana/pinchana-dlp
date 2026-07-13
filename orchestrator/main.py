@@ -114,6 +114,11 @@ def main() -> None:
     HOST_JOBS_DIR.mkdir(parents=True, exist_ok=True)
     r.ping()
     docker_client.ping()
+    try:
+        docker_client.images.get(WORKER_IMAGE)
+    except docker.errors.ImageNotFound:
+        logger.info("pulling_worker_image image=%s", WORKER_IMAGE)
+        docker_client.images.pull(WORKER_IMAGE)
     logger.info("orchestrator_ready")
     last_cleanup = 0.0
     while True:
