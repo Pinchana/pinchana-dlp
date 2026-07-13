@@ -25,6 +25,9 @@ EXECUTION_TIMEOUT = int(os.getenv("EXECUTION_TIMEOUT_SECONDS", "900"))
 MEMORY_LIMIT = os.getenv("WORKER_MEMORY_LIMIT", "768m")
 PIDS_LIMIT = int(os.getenv("WORKER_PIDS_LIMIT", "128"))
 VPN_PROXY_URL = os.getenv("VPN_PROXY_URL", "")
+HEALTH_FILE = Path(os.getenv("HEALTH_FILE", "/tmp/orchestrator-ready"))
+WORKER_UID = int(os.getenv("WORKER_UID", "10001"))
+WORKER_GID = int(os.getenv("WORKER_GID", "10001"))
 
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 docker_client = docker.from_env()
@@ -72,8 +75,6 @@ def spawn(message: dict[str, str]) -> None:
         return
 
     output_dir = HOST_JOBS_DIR / job_id
-    output_dir.mkdir(parents=True, exist_ok=False)
-    output_dir.chmod(0o777)
     environment = {
         "JOB_ID": job_id,
         "JOB_TOKEN": credential,
@@ -85,6 +86,9 @@ def spawn(message: dict[str, str]) -> None:
     if VPN_PROXY_URL:
         environment["VPN_PROXY_URL"] = VPN_PROXY_URL
     try:
+        output_dir.mkdir(parents=True, exist_ok=False)
+        os.chown(output_dir, WORKER_UID, WORKER_GID)
+        output_dir.chmod(0o700)
         container = docker_client.containers.run(
             WORKER_IMAGE,
             detach=True,
@@ -120,8 +124,10 @@ def main() -> None:
         logger.info("pulling_worker_image image=%s", WORKER_IMAGE)
         docker_client.images.pull(WORKER_IMAGE)
     logger.info("orchestrator_ready")
+    HEALTH_FILE.touch(mode=0o600)
     last_cleanup = 0.0
     while True:
+        HEALTH_FILE.touch(mode=0o600)
         item = r.blpop("dlp:orchestrator:spawn", timeout=5)
         if time.monotonic() - last_cleanup > 60:
             for path in HOST_JOBS_DIR.iterdir():

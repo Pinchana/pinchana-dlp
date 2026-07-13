@@ -2,10 +2,18 @@ services:
   redis:
     image: redis:7.4.5-alpine
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "--appendonly", "no", "--save", ""]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     networks: [dlp_backend]
     read_only: true
     tmpfs: [/data]
     security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   dlp-api:
     build: ./api
@@ -20,12 +28,20 @@ services:
       MAX_OUTPUT_BYTES: ${DLP_MAX_OUTPUT_BYTES:-2147483648}
     volumes: [dlp-jobs:/data/jobs:ro]
     expose: ["8080"]
-    depends_on: [redis]
+    depends_on:
+      redis:
+        condition: service_healthy
     networks: [dlp_backend, dlp_worker]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
 
   orchestrator:
     build: ./orchestrator
@@ -41,11 +57,24 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DLP_HOST_JOBS_DIR:?set DLP_HOST_JOBS_DIR}:${DLP_HOST_JOBS_DIR:?set DLP_HOST_JOBS_DIR}
-    depends_on: [redis, dlp-api, vpn]
+    depends_on:
+      redis:
+        condition: service_healthy
+      dlp-api:
+        condition: service_healthy
+      vpn:
+        condition: service_healthy
     networks: [dlp_backend]
     read_only: true
     tmpfs: [/tmp]
+    cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import time; p=Path('/tmp/orchestrator-ready'); raise SystemExit(0 if p.exists() and time.time() - p.stat().st_mtime < 20 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
 
   vpn:
     image: qmcgaw/gluetun:v3.40.0
@@ -59,6 +88,11 @@ services:
       HTTPPROXY: "on"
       HTTPPROXY_LISTENING_ADDRESS: :8888
     networks: [dlp_worker, dlp_egress]
+    healthcheck:
+      test: ["CMD-SHELL", "/gluetun-entrypoint healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   worker-image:

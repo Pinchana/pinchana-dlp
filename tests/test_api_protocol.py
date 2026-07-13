@@ -54,6 +54,18 @@ def test_gateway_authentication_and_owner_derivation():
     assert failure.value.status_code == 403
 
 
+def test_runtime_configuration_rejects_placeholder_secrets(monkeypatch):
+    monkeypatch.setattr(dlp, "GATEWAY_SERVICE_TOKEN", "dlp-disabled-change-me")
+    with pytest.raises(RuntimeError, match="DLP_GATEWAY_TOKEN"):
+        dlp.validate_runtime_config()
+
+
+def test_runtime_configuration_accepts_production_bounds(monkeypatch):
+    monkeypatch.setattr(dlp, "GATEWAY_SERVICE_TOKEN", "g" * 32)
+    monkeypatch.setattr(dlp, "REDIS_URL", "redis://:a-real-random-password@redis:6379/0")
+    dlp.validate_runtime_config()
+
+
 def test_owner_cannot_read_another_sessions_job(fake_store):
     job_id = record(fake_store)
     with pytest.raises(HTTPException) as failure:

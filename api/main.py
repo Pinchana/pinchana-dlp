@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger("pinchana_dlp")
@@ -44,6 +44,22 @@ MAX_CIPHERTEXT_BYTES = int(os.getenv("MAX_CIPHERTEXT_BYTES", str(256 * 1024)))
 MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", str(2 * 1024 * 1024 * 1024)))
 
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+
+def validate_runtime_config() -> None:
+    lowered_token = GATEWAY_SERVICE_TOKEN.lower()
+    if len(GATEWAY_SERVICE_TOKEN) < 32 or "replace-with" in lowered_token or lowered_token == "dlp-disabled-change-me":
+        raise RuntimeError("DLP_GATEWAY_TOKEN must be a non-placeholder secret of at least 32 characters")
+    if "dlp-disabled-change-me" in REDIS_URL or "replace-with" in REDIS_URL.lower():
+        raise RuntimeError("REDIS_URL must use a non-placeholder password")
+    if not 60 <= KEY_TTL_SECONDS <= 600:
+        raise RuntimeError("KEY_TTL_SECONDS must be between 60 and 600")
+    if JOB_TTL_SECONDS <= KEY_TTL_SECONDS or JOB_TTL_SECONDS > 86_400:
+        raise RuntimeError("JOB_TTL_SECONDS must exceed the key TTL and be at most one day")
+    if not 1 <= MAX_ACTIVE_JOBS <= 1_000 or not 1 <= RATE_LIMIT_PER_MINUTE <= 1_000:
+        raise RuntimeError("DLP concurrency and rate limits are outside safe bounds")
+    if MAX_OUTPUT_BYTES <= 0 or MAX_OUTPUT_BYTES > 20 * 1024 * 1024 * 1024:
+        raise RuntimeError("MAX_OUTPUT_BYTES is outside safe bounds")
 
 
 def now() -> int:
@@ -253,6 +269,7 @@ def public_status(record: dict[str, str]) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    validate_runtime_config()
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     r.ping()
     yield
@@ -264,8 +281,15 @@ app = FastAPI(title="Pinchana DLP", version="2.0.0", lifespan=lifespan)
 @app.middleware("http")
 async def request_size_limit(request: Request, call_next):
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > MAX_REQUEST_BYTES:
-        return __import__("fastapi").responses.JSONResponse({"detail": "Request too large"}, status_code=413)
+    if content_length:
+        try:
+            length = int(content_length)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
+        if length < 0:
+            return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
+        if length > MAX_REQUEST_BYTES:
+            return JSONResponse({"detail": "Request too large"}, status_code=413)
     return await call_next(request)
 
 
