@@ -1,6 +1,4 @@
-fastapi
-uvicorn[standard]
-redis
-docker
-pydantic
-yt-dlp
+fastapi==0.116.1
+pydantic==2.11.7
+redis==6.2.0
+uvicorn[standard]==0.35.0

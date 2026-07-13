@@ -1,54 +1,84 @@
 services:
   redis:
-    image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD:-SuperSecretRedisPassword123!}
-    networks:
-      - backend_net
+    image: redis:7.4.5-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "--appendonly", "no", "--save", ""]
+    networks: [dlp_backend]
+    read_only: true
+    tmpfs: [/data]
+    security_opt: [no-new-privileges:true]
 
-  vpn:
-    image: qmcgaw/gluetun
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      - VPN_SERVICE_PROVIDER=nordvpn
-      - OPENVPN_USER=${NORDVPN_USER}
-      - OPENVPN_PASSWORD=${NORDVPN_PASS}
-      - SERVER_COUNTRIES=${NORDVPN_COUNTRY:-}
-      - HTTPPROXY=on
-    networks:
-      - worker_net
-    restart: unless-stopped
-
-  api:
+  dlp-api:
     build: ./api
     environment:
-      REDIS_URL: redis://:${REDIS_PASSWORD:-SuperSecretRedisPassword123!}@redis:6379/0
-      DATA_DIR: /data
-      WORKER_IMAGE: pinchana-worker:latest
-      WORKER_NETWORK: pinchana-dlp_worker_net
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+      JOBS_DIR: /data/jobs
+      DLP_GATEWAY_TOKEN: ${DLP_GATEWAY_TOKEN:?set DLP_GATEWAY_TOKEN}
+      JOB_TTL_SECONDS: ${DLP_JOB_TTL_SECONDS:-3600}
+      KEY_TTL_SECONDS: ${DLP_KEY_TTL_SECONDS:-300}
+      MAX_ACTIVE_JOBS: ${DLP_MAX_ACTIVE_JOBS:-10}
+      RATE_LIMIT_PER_MINUTE: ${DLP_RATE_LIMIT_PER_MINUTE:-10}
+      MAX_OUTPUT_BYTES: ${DLP_MAX_OUTPUT_BYTES:-2147483648}
+    volumes: [dlp-jobs:/data/jobs:ro]
+    expose: ["8080"]
+    depends_on: [redis]
+    networks: [dlp_backend, dlp_worker]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  orchestrator:
+    build: ./orchestrator
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+      WORKER_IMAGE: ${DLP_WORKER_IMAGE:-pinchana-dlp-worker:latest}
+      WORKER_NETWORK: ${DLP_WORKER_NETWORK:-pinchana-dlp-worker}
+      DLP_API_URL: http://dlp-api:8080
+      HOST_JOBS_DIR: ${DLP_HOST_JOBS_DIR:?set DLP_HOST_JOBS_DIR}
+      MAX_OUTPUT_BYTES: ${DLP_MAX_OUTPUT_BYTES:-2147483648}
+      EXECUTION_TIMEOUT_SECONDS: ${DLP_EXECUTION_TIMEOUT_SECONDS:-900}
       VPN_PROXY_URL: http://vpn:8888
-      API_PUBLIC_URL: http://api:8080
-      API_ROOT_PATH: ${API_ROOT_PATH:-}
-      JOB_KEY_TTL_SECONDS: "3600"
-      HOST_DATA_DIR: ${PWD}/data
     volumes:
-      - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
-    ports: ["${API_BIND_HOST:-0.0.0.0}:${API_PORT:-8080}:8080"]
-    depends_on: [redis, vpn]
-    networks:
-      - backend_net
-      - worker_net
-      - vpn_net
+      - ${DLP_HOST_JOBS_DIR:?set DLP_HOST_JOBS_DIR}:${DLP_HOST_JOBS_DIR:?set DLP_HOST_JOBS_DIR}
+    depends_on: [redis, dlp-api, vpn]
+    networks: [dlp_backend]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  vpn:
+    image: qmcgaw/gluetun:v3.40.0
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    environment:
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:-nordvpn}
+      VPN_TYPE: ${VPN_TYPE:-wireguard}
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-}
+      HTTPPROXY: "on"
+      HTTPPROXY_LISTENING_ADDRESS: :8888
+    networks: [dlp_worker, dlp_egress]
+    restart: unless-stopped
+
+  worker-image:
+    image: ${DLP_WORKER_IMAGE:-pinchana-dlp-worker:latest}
+    build: ./worker
+    profiles: [build]
+    entrypoint: ["/bin/true"]
+
+volumes:
+  dlp-jobs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DLP_HOST_JOBS_DIR:?set DLP_HOST_JOBS_DIR}
 
 networks:
-  backend_net:
-    driver: bridge
+  dlp_backend:
     internal: true
-  worker_net:
-    driver: bridge
-  vpn_net:
-    driver: bridge
+  dlp_worker:
+    name: ${DLP_WORKER_NETWORK:-pinchana-dlp-worker}
     internal: true
+  dlp_egress: {}
