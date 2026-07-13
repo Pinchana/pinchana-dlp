@@ -127,6 +127,10 @@ def test_anonymous_submission_is_one_time_and_has_fixed_quality(fake_store, monk
     assert replay.value.status_code == 409
     with pytest.raises(ValidationError):
         dlp.SubmitRequest(url=request.url, quality="custom-format")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, codec="raw-codec")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, container="avi")
 
 
 def test_redis_payload_contains_ciphertext_but_not_plaintext_marker(fake_store, monkeypatch):

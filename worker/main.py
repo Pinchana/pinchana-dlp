@@ -29,14 +29,26 @@ PROXY_URL = os.environ.get("VPN_PROXY_URL", "")
 EXECUTION_TIMEOUT = int(os.environ.get("EXECUTION_TIMEOUT_SECONDS", "900"))
 MAX_OUTPUT_BYTES = int(os.environ.get("MAX_OUTPUT_BYTES", str(2 * 1024 * 1024 * 1024)))
 
-QUALITY_FORMATS = {
-    "best": "bv*+ba/b",
-    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-    "audio": "bestaudio/best",
+QUALITY_HEIGHTS = {
+    "best": None,
+    "8k": 4320,
+    "4k": 2160,
+    "1440p": 1440,
+    "1080p": 1080,
+    "720p": 720,
+    "480p": 480,
+    "360p": 360,
+    "240p": 240,
+    "144p": 144,
+    "audio": None,
 }
+CODEC_FILTERS = {
+    "auto": None,
+    "h264": ("avc1", "mp4a"),
+    "av1": ("av01", "opus"),
+    "vp9": ("vp9", "opus"),
+}
+CONTAINERS = {"auto", "mp4", "webm", "mkv"}
 
 
 def b64d(value: str) -> bytes:
@@ -124,10 +136,49 @@ def output_size() -> int:
     return sum(path.stat().st_size for path in OUTPUT_DIR.iterdir() if path.is_file())
 
 
-def execute(payload: dict[str, object], cookies_path: Path | None) -> Path:
-    quality = str(payload.get("quality", "best"))
-    if quality not in QUALITY_FORMATS:
+def format_selector(quality: str, codec: str) -> str:
+    if quality not in QUALITY_HEIGHTS:
         raise ValueError("unsupported quality")
+    if codec not in CODEC_FILTERS:
+        raise ValueError("unsupported codec")
+    if quality == "audio":
+        return "bestaudio/best"
+    height = QUALITY_HEIGHTS[quality]
+    height_filter = f"[height<={height}]" if height else ""
+    video = f"bestvideo{height_filter}"
+    combined = f"best{height_filter}"
+    preferred = CODEC_FILTERS[codec]
+    if preferred is None:
+        return f"{video}+bestaudio/{combined}"
+    video_codec, audio_codec = preferred
+    preferred_video = f"{video}[vcodec^={video_codec}]"
+    preferred_audio = f"bestaudio[acodec^={audio_codec}]"
+    return (
+        f"{preferred_video}+{preferred_audio}/"
+        f"{preferred_video}+bestaudio/"
+        f"{video}+{preferred_audio}/"
+        f"{video}+bestaudio/{combined}"
+    )
+
+
+def output_container(codec: str, container: str, quality: str) -> str | None:
+    if container not in CONTAINERS:
+        raise ValueError("unsupported container")
+    if quality == "audio":
+        return None
+    if container != "auto":
+        return container
+    if codec == "h264":
+        return "mp4"
+    if codec in {"av1", "vp9"}:
+        return "webm"
+    return None
+
+
+def build_command(payload: dict[str, object], cookies_path: Path | None) -> list[str]:
+    quality = str(payload.get("quality", "best"))
+    codec = str(payload.get("codec", "auto"))
+    container = str(payload.get("container", "auto"))
     command = [
         sys.executable,
         "-m",
@@ -141,15 +192,23 @@ def execute(payload: dict[str, object], cookies_path: Path | None) -> Path:
         "--js-runtimes",
         "deno:/usr/local/bin/deno",
         "--format",
-        QUALITY_FORMATS[quality],
+        format_selector(quality, codec),
         "--output",
         str(OUTPUT_DIR / "media.%(ext)s"),
     ]
+    selected_container = output_container(codec, container, quality)
+    if selected_container:
+        command.extend(["--merge-output-format", selected_container, "--remux-video", selected_container])
     if cookies_path:
         command.extend(["--cookies", str(cookies_path)])
     if PROXY_URL:
         command.extend(["--proxy", PROXY_URL])
     command.append(str(payload["url"]))
+    return command
+
+
+def execute(payload: dict[str, object], cookies_path: Path | None) -> Path:
+    command = build_command(payload, cookies_path)
 
     proc = subprocess.Popen(
         command,

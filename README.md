@@ -11,7 +11,7 @@ The trusted gateway authenticates with `x-dlp-service-token` and supplies an opa
 - a 12-byte AES-GCM IV; and
 - ciphertext authenticated with `pinchana-dlp:v2:{jobId}:{keyId}`.
 
-Anonymous submissions omit `cookiesEnc`; the worker runs yt-dlp without `--cookies`. Quality is a fixed enum and callers cannot provide a yt-dlp format string.
+Anonymous submissions omit `cookiesEnc`; the worker runs yt-dlp without `--cookies`. Quality, preferred codec, and output container are fixed enums and callers cannot provide a yt-dlp format string. Codec selection falls back to the best available stream; explicit containers are remuxed without transcoding.
 
 Gateway routes:
 

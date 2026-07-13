@@ -134,7 +134,11 @@ class SubmitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str = Field(min_length=10, max_length=2048)
-    quality: Literal["best", "1080p", "720p", "480p", "360p", "audio"] = "best"
+    quality: Literal[
+        "best", "8k", "4k", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p", "audio"
+    ] = "best"
+    codec: Literal["auto", "h264", "av1", "vp9"] = "auto"
+    container: Literal["auto", "mp4", "webm", "mkv"] = "auto"
     cookiesEnc: CookiesEnvelope | None = None
 
 
