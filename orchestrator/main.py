@@ -11,6 +11,7 @@ from pathlib import Path
 
 import docker
 import redis
+from job_directory import prepare_output_directory
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("pinchana_dlp_orchestrator")
@@ -86,9 +87,7 @@ def spawn(message: dict[str, str]) -> None:
     if VPN_PROXY_URL:
         environment["VPN_PROXY_URL"] = VPN_PROXY_URL
     try:
-        output_dir.mkdir(parents=True, exist_ok=False)
-        os.chown(output_dir, WORKER_UID, WORKER_GID)
-        output_dir.chmod(0o700)
+        prepare_output_directory(output_dir, WORKER_UID, WORKER_GID)
         container = docker_client.containers.run(
             WORKER_IMAGE,
             detach=True,

@@ -69,6 +69,7 @@ services:
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
+    cap_add: [CHOWN]
     security_opt: [no-new-privileges:true]
     healthcheck:
       test: ["CMD", "python", "-c", "from pathlib import Path; import time; p=Path('/tmp/orchestrator-ready'); raise SystemExit(0 if p.exists() and time.time() - p.stat().st_mtime < 20 else 1)"]
