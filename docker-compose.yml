@@ -27,10 +27,14 @@ services:
       MAX_ACTIVE_JOBS: ${DLP_MAX_ACTIVE_JOBS:-10}
       RATE_LIMIT_PER_MINUTE: ${DLP_RATE_LIMIT_PER_MINUTE:-10}
       MAX_OUTPUT_BYTES: ${DLP_MAX_OUTPUT_BYTES:-2147483648}
+      DLP_DOH_URL: ${DLP_DOH_URL:-https://cloudflare-dns.com/dns-query}
+      DLP_DOH_PROXY_URL: http://vpn:8888
     volumes: [dlp-jobs:/data/jobs:ro]
     expose: ["8080"]
     depends_on:
       redis:
+        condition: service_healthy
+      vpn:
         condition: service_healthy
     networks: [dlp_backend, dlp_worker]
     read_only: true

@@ -14,13 +14,14 @@ import json
 import logging
 import os
 import secrets
-import socket
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit
+from urllib import error as url_error
+from urllib import request as url_request
+from urllib.parse import urlencode, urlsplit
 
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -42,6 +43,8 @@ RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
 MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(320 * 1024)))
 MAX_CIPHERTEXT_BYTES = int(os.getenv("MAX_CIPHERTEXT_BYTES", str(256 * 1024)))
 MAX_OUTPUT_BYTES = int(os.getenv("MAX_OUTPUT_BYTES", str(2 * 1024 * 1024 * 1024)))
+DLP_DOH_URL = os.getenv("DLP_DOH_URL", "")
+DLP_DOH_PROXY_URL = os.getenv("DLP_DOH_PROXY_URL", "")
 
 r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -60,6 +63,12 @@ def validate_runtime_config() -> None:
         raise RuntimeError("DLP concurrency and rate limits are outside safe bounds")
     if MAX_OUTPUT_BYTES <= 0 or MAX_OUTPUT_BYTES > 20 * 1024 * 1024 * 1024:
         raise RuntimeError("MAX_OUTPUT_BYTES is outside safe bounds")
+    doh = urlsplit(DLP_DOH_URL)
+    proxy = urlsplit(DLP_DOH_PROXY_URL)
+    if doh.scheme != "https" or not doh.hostname or doh.username or doh.password:
+        raise RuntimeError("DLP_DOH_URL must be a credential-free HTTPS URL")
+    if proxy.scheme not in {"http", "https"} or not proxy.hostname or proxy.username or proxy.password:
+        raise RuntimeError("DLP_DOH_PROXY_URL must be a credential-free HTTP(S) proxy URL")
 
 
 def now() -> int:
@@ -204,6 +213,33 @@ def owned_job(job_id: str, context: GatewayContext) -> dict[str, str]:
     return record
 
 
+def resolve_hostname(hostname: str) -> set[str]:
+    opener = url_request.build_opener(
+        url_request.ProxyHandler({"http": DLP_DOH_PROXY_URL, "https": DLP_DOH_PROXY_URL})
+    )
+    addresses: set[str] = set()
+    try:
+        for record_type in ("A", "AAAA"):
+            separator = "&" if "?" in DLP_DOH_URL else "?"
+            endpoint = f"{DLP_DOH_URL}{separator}{urlencode({'name': hostname, 'type': record_type})}"
+            request = url_request.Request(endpoint, headers={"Accept": "application/dns-json"})
+            with opener.open(request, timeout=5) as response:
+                raw = response.read(65_537)
+            if len(raw) > 65_536:
+                raise ValueError("DNS response is too large")
+            payload = json.loads(raw)
+            if payload.get("Status") not in {0, 3}:
+                raise ValueError("DNS resolver returned an error")
+            for answer in payload.get("Answer", []):
+                if answer.get("type") in {1, 28}:
+                    addresses.add(str(answer.get("data", "")))
+    except (url_error.URLError, TimeoutError, ValueError, json.JSONDecodeError, AttributeError) as exc:
+        raise HTTPException(400, "URL hostname could not be resolved") from exc
+    if not addresses:
+        raise HTTPException(400, "URL hostname could not be resolved")
+    return addresses
+
+
 def validate_public_url(value: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -213,10 +249,7 @@ def validate_public_url(value: str) -> str:
     hostname = parsed.hostname.rstrip(".").lower()
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
         raise HTTPException(400, "Private network targets are not allowed")
-    try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, parsed.port or 443)}
-    except socket.gaierror as exc:
-        raise HTTPException(400, "URL hostname could not be resolved") from exc
+    addresses = resolve_hostname(hostname)
     for address in addresses:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
         if not ip.is_global:

@@ -1,4 +1,5 @@
 import base64
+import json
 import time
 
 import fakeredis
@@ -21,6 +22,8 @@ def fake_store(monkeypatch, tmp_path):
     monkeypatch.setattr(dlp, "GATEWAY_SERVICE_TOKEN", TOKEN)
     monkeypatch.setattr(dlp, "JOBS_DIR", tmp_path)
     monkeypatch.setattr(dlp, "RATE_LIMIT_PER_MINUTE", 2)
+    monkeypatch.setattr(dlp, "DLP_DOH_URL", "https://resolver.example/dns-query")
+    monkeypatch.setattr(dlp, "DLP_DOH_PROXY_URL", "http://vpn:8888")
     return store
 
 
@@ -64,6 +67,44 @@ def test_runtime_configuration_accepts_production_bounds(monkeypatch):
     monkeypatch.setattr(dlp, "GATEWAY_SERVICE_TOKEN", "g" * 32)
     monkeypatch.setattr(dlp, "REDIS_URL", "redis://:a-real-random-password@redis:6379/0")
     dlp.validate_runtime_config()
+
+
+def test_hostname_resolution_uses_doh_proxy(monkeypatch):
+    payloads = {
+        "A": {"Status": 0, "Answer": [{"type": 1, "data": "142.250.74.206"}]},
+        "AAAA": {"Status": 0, "Answer": [{"type": 28, "data": "2a00:1450:4001:830::200e"}]},
+    }
+    requests = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(self.payload).encode()
+
+    class Opener:
+        def open(self, request, timeout):
+            requests.append((request.full_url, timeout))
+            record_type = "AAAA" if "type=AAAA" in request.full_url else "A"
+            return Response(payloads[record_type])
+
+    monkeypatch.setattr(dlp.url_request, "build_opener", lambda *_args: Opener())
+
+    assert dlp.resolve_hostname("youtube.com") == {"142.250.74.206", "2a00:1450:4001:830::200e"}
+    assert len(requests) == 2
+
+
+def test_private_doh_answer_is_rejected(monkeypatch):
+    monkeypatch.setattr(dlp, "resolve_hostname", lambda _hostname: {"127.0.0.1"})
+    with pytest.raises(HTTPException, match="Private network targets"):
+        dlp.validate_public_url("https://example.com/video")
 
 
 def test_owner_cannot_read_another_sessions_job(fake_store):
