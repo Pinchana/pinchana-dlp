@@ -82,7 +82,11 @@ def validate_netscape_cookies(value: bytes) -> None:
     text = value.decode("utf-8", errors="strict")
     if len(value) > 256 * 1024 or "\x00" in text:
         raise ValueError("cookie file is invalid or too large")
-    lines = [line for line in text.splitlines() if line and not line.startswith("#")]
+    lines = [
+        line
+        for line in text.splitlines()
+        if line and (not line.startswith("#") or line.startswith("#HttpOnly_"))
+    ]
     if not lines:
         raise ValueError("cookie file contains no cookies")
     for line in lines:

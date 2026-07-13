@@ -7,7 +7,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric import x25519
 
-from worker.main import decrypt_cookies, sanitize_error
+from worker.main import decrypt_cookies, sanitize_error, validate_netscape_cookies
 
 
 COOKIE_MARKER = "COOKIE_MARKER_NEVER_PERSIST\tsecret-value"
@@ -53,3 +53,9 @@ def test_wrong_worker_key_and_wrong_authenticated_job_are_rejected():
 
 def test_cookie_values_are_not_exposed_by_log_sanitizer():
     assert "secret-value" not in sanitize_error("Cookie: secret-value https://youtube.com/watch?v=abc")
+
+
+def test_netscape_validation_accepts_httponly_cookie_lines():
+    validate_netscape_cookies(
+        b"# Netscape HTTP Cookie File\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tsecret\n"
+    )
