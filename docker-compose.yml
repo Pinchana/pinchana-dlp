@@ -5,8 +5,9 @@ services:
     environment:
       REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     networks: [dlp_backend]
+    user: "999:1000"
     read_only: true
-    tmpfs: [/data]
+    tmpfs: ["/data:rw,noexec,nosuid,nodev,size=64m,uid=999,gid=1000,mode=0700"]
     security_opt: [no-new-privileges:true]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
