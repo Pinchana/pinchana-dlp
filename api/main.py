@@ -32,6 +32,18 @@ logger = logging.getLogger("pinchana_dlp")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 PROTOCOL_VERSION = 2
+YOUTUBE_DUB_LANGUAGES = (
+    "af", "az", "id", "ms", "bs", "ca", "cs", "da", "de", "et", "en-IN", "en-GB", "en",
+    "es", "es-419", "es-US", "eu", "fil", "fr", "fr-CA", "gl", "hr", "zu", "is", "it", "sw",
+    "lv", "lt", "hu", "nl", "no", "uz", "pl", "pt-PT", "pt", "ro", "sq", "sk", "sl",
+    "sr-Latn", "fi", "sv", "vi", "tr", "be", "bg", "ky", "kk", "mk", "mn", "ru", "sr", "uk",
+    "el", "hy", "iw", "ur", "ar", "fa", "ne", "mr", "hi", "as", "bn", "pa", "gu", "or", "ta",
+    "te", "kn", "ml", "si", "th", "lo", "my", "ka", "am", "km", "zh-CN", "zh-TW", "zh-HK",
+    "ja", "ko",
+)
+YOUTUBE_HOSTS = {"youtube.com", "youtu.be"}
+AUDIO_FORMATS = ("best", "mp3", "ogg", "wav", "opus")
+AUDIO_BITRATES = ("320", "256", "128", "96", "64", "8")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 JOBS_DIR = Path(os.getenv("JOBS_DIR", "/data/jobs"))
 GATEWAY_SERVICE_TOKEN = os.getenv("DLP_GATEWAY_TOKEN", "")
@@ -139,7 +151,18 @@ class SubmitRequest(BaseModel):
     ] = "best"
     codec: Literal["auto", "h264", "av1", "vp9"] = "auto"
     container: Literal["auto", "mp4", "webm", "mkv"] = "auto"
+    audioFormat: Literal["best", "mp3", "ogg", "wav", "opus"] = "best"
+    audioBitrate: Literal["320", "256", "128", "96", "64", "8"] = "128"
+    preferBetterAudio: bool = False
+    dubLanguage: str = Field(default="original", min_length=2, max_length=16)
     cookiesEnc: CookiesEnvelope | None = None
+
+    @field_validator("dubLanguage")
+    @classmethod
+    def valid_dub_language(cls, value: str) -> str:
+        if value != "original" and value not in YOUTUBE_DUB_LANGUAGES:
+            raise ValueError("unsupported YouTube dub language")
+        return value
 
 
 class WorkerRegisterRequest(BaseModel):
@@ -261,6 +284,14 @@ def validate_public_url(value: str) -> str:
     return value
 
 
+def validate_youtube_url(value: str) -> str:
+    parsed = urlsplit(value)
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if hostname not in YOUTUBE_HOSTS and not hostname.endswith(".youtube.com"):
+        raise HTTPException(400, "DLP currently supports YouTube URLs only")
+    return validate_public_url(value)
+
+
 def check_rate_limit(owner: str) -> None:
     bucket = f"dlp:rate:{owner}:{now() // 60}"
     count = r.incr(bucket)
@@ -332,7 +363,21 @@ async def request_size_limit(request: Request, call_next):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "protocol": PROTOCOL_VERSION, "redis": bool(r.ping())}
+    return {
+        "status": "ok",
+        "protocol": PROTOCOL_VERSION,
+        "redis": bool(r.ping()),
+        "capabilities": {
+            "services": ["youtube"],
+            "qualities": ["best", "8k", "4k", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p", "audio"],
+            "codecs": ["auto", "h264", "av1", "vp9"],
+            "containers": ["auto", "mp4", "webm", "mkv"],
+            "audioFormats": list(AUDIO_FORMATS),
+            "audioBitrates": list(AUDIO_BITRATES),
+            "dubLanguages": list(YOUTUBE_DUB_LANGUAGES),
+            "betterAudio": True,
+        },
+    }
 
 
 @app.post("/v2/jobs")
@@ -387,7 +432,7 @@ def submit_job(job_id: str, request: SubmitRequest, context: GatewayContext = De
         raise HTTPException(410, "Worker key expired")
     if request.cookiesEnc and request.cookiesEnc.keyId != record["keyId"]:
         raise HTTPException(400, "Cookie envelope key does not match the allocated worker")
-    url = validate_public_url(request.url)
+    url = validate_youtube_url(request.url)
     payload = request.model_dump(mode="json")
     payload["url"] = url
     transition(job_id, {"ALLOCATED"}, "QUEUED")

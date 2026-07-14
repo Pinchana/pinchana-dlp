@@ -69,6 +69,7 @@ def test_worker_builds_fixed_codec_and_container_selectors(monkeypatch, tmp_path
             "quality": "4k",
             "codec": "h264",
             "container": "mp4",
+            "dubLanguage": "fr",
         },
         Path("/run/cookies/cookies.txt"),
     )
@@ -77,6 +78,7 @@ def test_worker_builds_fixed_codec_and_container_selectors(monkeypatch, tmp_path
     assert "height<=2160" in selector
     assert "vcodec^=avc1" in selector
     assert "acodec^=mp4a" in selector
+    assert "language^=fr" in selector
     assert command[command.index("--merge-output-format") + 1] == "mp4"
     assert command[command.index("--remux-video") + 1] == "mp4"
     assert command[command.index("--proxy") + 1] == "http://vpn:8888"
@@ -89,6 +91,43 @@ def test_auto_container_tracks_preferred_codec():
     assert worker.output_container("vp9", "auto", "4k") == "webm"
     assert worker.output_container("auto", "auto", "best") is None
     assert worker.output_container("h264", "auto", "audio") is None
+
+
+@pytest.mark.parametrize(
+    ("audio_format", "expected_format", "uses_bitrate"),
+    [("mp3", "mp3", True), ("ogg", "vorbis", True), ("opus", "opus", True), ("wav", "wav", False)],
+)
+def test_audio_conversion_options(monkeypatch, tmp_path, audio_format, expected_format, uses_bitrate):
+    monkeypatch.setattr(worker, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(worker, "PROXY_URL", "")
+    command = worker.build_command({
+        "url": "https://youtube.com/watch?v=abcdefghijk",
+        "quality": "audio",
+        "audioFormat": audio_format,
+        "audioBitrate": "256",
+        "preferBetterAudio": True,
+        "dubLanguage": "de",
+    }, None)
+    selector = command[command.index("--format") + 1]
+    assert "language^=de" in selector
+    assert command[command.index("--audio-format") + 1] == expected_format
+    assert ("--audio-quality" in command) is uses_bitrate
+    if uses_bitrate:
+        assert command[command.index("--audio-quality") + 1] == "256K"
+    assert command[command.index("--format-sort") + 1] == "abr,asr,channels"
+
+
+def test_best_audio_keeps_source_without_conversion(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(worker, "PROXY_URL", "")
+    command = worker.build_command({
+        "url": "https://youtu.be/abcdefghijk",
+        "quality": "audio",
+        "audioFormat": "best",
+        "dubLanguage": "original",
+    }, None)
+    assert "--extract-audio" not in command
+    assert "--audio-quality" not in command
 
 
 def test_run_removes_plaintext_cookie_file_and_wipes_buffer(monkeypatch, tmp_path):

@@ -131,6 +131,12 @@ def test_anonymous_submission_is_one_time_and_has_fixed_quality(fake_store, monk
         dlp.SubmitRequest(url=request.url, codec="raw-codec")
     with pytest.raises(ValidationError):
         dlp.SubmitRequest(url=request.url, container="avi")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, audioFormat="flac")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, audioBitrate="192")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, dubLanguage="not-a-language")
 
 
 def test_redis_payload_contains_ciphertext_but_not_plaintext_marker(fake_store, monkeypatch):
@@ -144,7 +150,7 @@ def test_redis_payload_contains_ciphertext_but_not_plaintext_marker(fake_store, 
         iv=base64.b64encode(b"i" * 12).decode(),
         ciphertext=base64.b64encode(b"encrypted-cookie-marker").decode(),
     )
-    dlp.submit_job(job_id, dlp.SubmitRequest(url="https://example.com/video", cookiesEnc=envelope), context())
+    dlp.submit_job(job_id, dlp.SubmitRequest(url="https://youtube.com/watch?v=abcdefghijk", cookiesEnc=envelope), context())
     persisted = fake_store.get(f"{dlp.job_key(job_id)}:payload")
     assert "COOKIE_MARKER_NEVER_PERSIST" not in persisted
     assert envelope.ciphertext in persisted
@@ -155,7 +161,7 @@ def test_expired_worker_key_rejects_submission(fake_store, monkeypatch):
     fake_store.hset(dlp.job_key(job_id), "keyExpiresAt", int(time.time()) - 1)
     monkeypatch.setattr(dlp, "validate_public_url", lambda value: value)
     with pytest.raises(HTTPException) as failure:
-        dlp.submit_job(job_id, dlp.SubmitRequest(url="https://example.com/video"), context())
+        dlp.submit_job(job_id, dlp.SubmitRequest(url="https://youtube.com/watch?v=abcdefghijk"), context())
     assert failure.value.status_code == 410
 
 
@@ -164,6 +170,26 @@ def test_ssrf_targets_are_rejected(url):
     with pytest.raises(HTTPException) as failure:
         dlp.validate_public_url(url)
     assert failure.value.status_code == 400
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.com/video",
+    "https://youtube.com.example.com/watch?v=abcdefghijk",
+    "https://notyoutube.com/watch?v=abcdefghijk",
+])
+def test_dlp_rejects_non_youtube_hosts(url):
+    with pytest.raises(HTTPException, match="YouTube URLs only"):
+        dlp.validate_youtube_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://youtube.com/watch?v=abcdefghijk",
+    "https://music.youtube.com/watch?v=abcdefghijk",
+    "https://youtu.be/abcdefghijk",
+])
+def test_dlp_accepts_youtube_hosts(monkeypatch, url):
+    monkeypatch.setattr(dlp, "validate_public_url", lambda value: value)
+    assert dlp.validate_youtube_url(url) == url
 
 
 def test_ciphertext_and_envelope_limits_are_enforced():

@@ -49,6 +49,28 @@ CODEC_FILTERS = {
     "vp9": ("vp9", "opus"),
 }
 CONTAINERS = {"auto", "mp4", "webm", "mkv"}
+AUDIO_FORMATS = {"best", "mp3", "ogg", "wav", "opus"}
+AUDIO_BITRATES = {"320", "256", "128", "96", "64", "8"}
+YOUTUBE_DUB_LANGUAGES = {
+    "af", "az", "id", "ms", "bs", "ca", "cs", "da", "de", "et", "en-IN", "en-GB", "en",
+    "es", "es-419", "es-US", "eu", "fil", "fr", "fr-CA", "gl", "hr", "zu", "is", "it", "sw",
+    "lv", "lt", "hu", "nl", "no", "uz", "pl", "pt-PT", "pt", "ro", "sq", "sk", "sl",
+    "sr-Latn", "fi", "sv", "vi", "tr", "be", "bg", "ky", "kk", "mk", "mn", "ru", "sr", "uk",
+    "el", "hy", "iw", "ur", "ar", "fa", "ne", "mr", "hi", "as", "bn", "pa", "gu", "or", "ta",
+    "te", "kn", "ml", "si", "th", "lo", "my", "ka", "am", "km", "zh-CN", "zh-TW", "zh-HK",
+    "ja", "ko",
+}
+AUDIO_FORMAT_ARGUMENTS = {"mp3": "mp3", "ogg": "vorbis", "wav": "wav", "opus": "opus"}
+AUDIO_MIME_TYPES = {
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".wav": "audio/wav",
+    ".webm": "audio/webm",
+}
 
 
 def b64d(value: str) -> bytes:
@@ -136,29 +158,46 @@ def output_size() -> int:
     return sum(path.stat().st_size for path in OUTPUT_DIR.iterdir() if path.is_file())
 
 
-def format_selector(quality: str, codec: str) -> str:
+def audio_candidates(dub_language: str, audio_codec: str | None = None) -> list[str]:
+    if dub_language != "original" and dub_language not in YOUTUBE_DUB_LANGUAGES:
+        raise ValueError("unsupported YouTube dub language")
+    filters: list[str] = []
+    if dub_language != "original":
+        filters.append(f"[language^={dub_language}]")
+    codec_filter = f"[acodec^={audio_codec}]" if audio_codec else ""
+    candidates: list[str] = []
+    if filters:
+        if codec_filter:
+            candidates.append(f"bestaudio{''.join(filters)}{codec_filter}")
+        candidates.append(f"bestaudio{''.join(filters)}")
+    if codec_filter:
+        candidates.append(f"bestaudio{codec_filter}")
+    candidates.append("bestaudio")
+    return candidates
+
+
+def format_selector(quality: str, codec: str, dub_language: str = "original") -> str:
     if quality not in QUALITY_HEIGHTS:
         raise ValueError("unsupported quality")
     if codec not in CODEC_FILTERS:
         raise ValueError("unsupported codec")
+    preferred = CODEC_FILTERS[codec]
+    preferred_audio_codec = preferred[1] if preferred else None
+    audios = audio_candidates(dub_language, preferred_audio_codec)
     if quality == "audio":
-        return "bestaudio/best"
+        return "/".join([*audios, "best"])
     height = QUALITY_HEIGHTS[quality]
     height_filter = f"[height<={height}]" if height else ""
     video = f"bestvideo{height_filter}"
     combined = f"best{height_filter}"
-    preferred = CODEC_FILTERS[codec]
     if preferred is None:
-        return f"{video}+bestaudio/{combined}"
-    video_codec, audio_codec = preferred
+        return "/".join([*(f"{video}+{audio}" for audio in audios), combined])
+    video_codec, _audio_codec = preferred
     preferred_video = f"{video}[vcodec^={video_codec}]"
-    preferred_audio = f"bestaudio[acodec^={audio_codec}]"
-    return (
-        f"{preferred_video}+{preferred_audio}/"
-        f"{preferred_video}+bestaudio/"
-        f"{video}+{preferred_audio}/"
-        f"{video}+bestaudio/{combined}"
-    )
+    return "/".join([
+        *(f"{candidate_video}+{audio}" for candidate_video in (preferred_video, video) for audio in audios),
+        combined,
+    ])
 
 
 def output_container(codec: str, container: str, quality: str) -> str | None:
@@ -179,6 +218,13 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
     quality = str(payload.get("quality", "best"))
     codec = str(payload.get("codec", "auto"))
     container = str(payload.get("container", "auto"))
+    audio_format = str(payload.get("audioFormat", "best"))
+    audio_bitrate = str(payload.get("audioBitrate", "128"))
+    dub_language = str(payload.get("dubLanguage", "original"))
+    if audio_format not in AUDIO_FORMATS:
+        raise ValueError("unsupported audio format")
+    if audio_bitrate not in AUDIO_BITRATES:
+        raise ValueError("unsupported audio bitrate")
     command = [
         sys.executable,
         "-m",
@@ -192,13 +238,19 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
         "--js-runtimes",
         "deno:/usr/local/bin/deno",
         "--format",
-        format_selector(quality, codec),
+        format_selector(quality, codec, dub_language),
         "--output",
         str(OUTPUT_DIR / "media.%(ext)s"),
     ]
     selected_container = output_container(codec, container, quality)
     if selected_container:
         command.extend(["--merge-output-format", selected_container, "--remux-video", selected_container])
+    if payload.get("preferBetterAudio") is True:
+        command.extend(["--format-sort", "abr,asr,channels"])
+    if quality == "audio" and audio_format != "best":
+        command.extend(["--extract-audio", "--audio-format", AUDIO_FORMAT_ARGUMENTS[audio_format]])
+        if audio_format in {"mp3", "ogg", "opus"}:
+            command.extend(["--audio-quality", f"{audio_bitrate}K"])
     if cookies_path:
         command.extend(["--cookies", str(cookies_path)])
     if PROXY_URL:
@@ -297,7 +349,8 @@ def run() -> None:
         call("POST", f"/internal/jobs/{JOB_ID}/complete", {
             "filename": output.name,
             "size": output.stat().st_size,
-            "mime": "audio/mpeg" if payload.get("quality") == "audio" else "application/octet-stream",
+            "mime": AUDIO_MIME_TYPES.get(output.suffix.lower(), "application/octet-stream")
+            if payload.get("quality") == "audio" else "application/octet-stream",
         })
     finally:
         if plaintext is not None:
