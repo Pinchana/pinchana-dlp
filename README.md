@@ -31,6 +31,8 @@ Worker routes under `/internal/jobs/...` require a unique credential for that jo
 
 Workers use a read-only root filesystem, dropped capabilities, `no-new-privileges`, PID/CPU/memory limits, an output-only job mount, RAM-backed temporary directories, a forced lifetime, and automatic container removal. yt-dlp and Deno are pinned in the worker image; executable components are not downloaded at runtime.
 
+The official defaults allow three concurrent workers, an 8 GiB final artifact, and 45 minutes of execution within a two-hour job lifetime. During format merging, the worker permits temporary files up to twice the final limit plus 512 MiB, while the completed artifact is still rejected above 8 GiB. Size and concurrency remain configurable for self-hosted deployments.
+
 ## Development
 
 Copy `example.env` to `.env`, replace every secret and absolute host path, then run:

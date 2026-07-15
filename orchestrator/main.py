@@ -21,8 +21,9 @@ WORKER_IMAGE = os.getenv("WORKER_IMAGE", "pinchana-dlp-worker:latest")
 WORKER_NETWORK = os.getenv("WORKER_NETWORK", "pinchana-dlp-worker")
 API_URL = os.getenv("DLP_API_URL", "http://dlp-api:8080")
 HOST_JOBS_DIR = Path(os.getenv("HOST_JOBS_DIR", "/data/jobs")).resolve()
-OUTPUT_LIMIT = int(os.getenv("MAX_OUTPUT_BYTES", str(2 * 1024 * 1024 * 1024)))
-EXECUTION_TIMEOUT = int(os.getenv("EXECUTION_TIMEOUT_SECONDS", "900"))
+OUTPUT_LIMIT = int(os.getenv("MAX_OUTPUT_BYTES", str(8 * 1024 * 1024 * 1024)))
+WORK_LIMIT = int(os.getenv("MAX_WORK_BYTES", str(OUTPUT_LIMIT * 2 + 512 * 1024 * 1024)))
+EXECUTION_TIMEOUT = int(os.getenv("EXECUTION_TIMEOUT_SECONDS", "2700"))
 MEMORY_LIMIT = os.getenv("WORKER_MEMORY_LIMIT", "768m")
 PIDS_LIMIT = int(os.getenv("WORKER_PIDS_LIMIT", "128"))
 VPN_PROXY_URL = os.getenv("VPN_PROXY_URL", "")
@@ -83,6 +84,7 @@ def spawn(message: dict[str, str]) -> None:
         "OUTPUT_DIR": "/output",
         "EXECUTION_TIMEOUT_SECONDS": str(EXECUTION_TIMEOUT),
         "MAX_OUTPUT_BYTES": str(OUTPUT_LIMIT),
+        "MAX_WORK_BYTES": str(WORK_LIMIT),
     }
     if VPN_PROXY_URL:
         environment["VPN_PROXY_URL"] = VPN_PROXY_URL

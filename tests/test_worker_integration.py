@@ -81,6 +81,7 @@ def test_worker_builds_fixed_codec_and_container_selectors(monkeypatch, tmp_path
     assert "language^=fr" in selector
     assert command[command.index("--merge-output-format") + 1] == "mp4"
     assert command[command.index("--remux-video") + 1] == "mp4"
+    assert command[command.index("--max-filesize") + 1] == str(worker.MAX_OUTPUT_BYTES)
     assert command[command.index("--proxy") + 1] == "http://vpn:8888"
     assert command[-1] == "https://youtube.com/watch?v=abcdefghijk"
 

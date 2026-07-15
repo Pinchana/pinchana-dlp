@@ -5,6 +5,7 @@ import time
 import fakeredis
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import api.main as dlp
@@ -235,3 +236,55 @@ def test_file_requires_owner_and_ready_state(fake_store, tmp_path):
     assert dlp.get_file(job_id, context()).path == output
     with pytest.raises(HTTPException):
         dlp.get_file(job_id, context(OWNER_B))
+
+
+@pytest.mark.parametrize(
+    ("range_header", "expected_status", "expected_body", "expected_content_range"),
+    [
+        ("bytes=1-3", 206, b"edi", "bytes 1-3/5"),
+        ("bytes=-2", 206, b"ia", "bytes 3-4/5"),
+        ("bytes=10-20", 416, b"", "*/5"),
+    ],
+)
+def test_file_supports_private_byte_ranges(fake_store, tmp_path, range_header, expected_status, expected_body, expected_content_range):
+    job_id = record(fake_store, status="READY")
+    output = tmp_path / job_id / "media [pinchana.cc].mp4"
+    output.parent.mkdir()
+    output.write_bytes(b"media")
+    fake_store.hset(dlp.job_key(job_id), mapping={"filename": output.name, "mime": "video/mp4", "size": "5"})
+
+    with TestClient(dlp.app) as client:
+        response = client.get(
+            f"/v2/jobs/{job_id}/file",
+            headers={
+                "x-dlp-service-token": TOKEN,
+                "x-job-owner": OWNER_A,
+                "Range": range_header,
+            },
+        )
+
+    assert response.status_code == expected_status
+    assert response.content == expected_body
+    if expected_status == 206:
+        assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == expected_content_range
+
+
+def test_private_byte_range_still_requires_job_owner(fake_store, tmp_path):
+    job_id = record(fake_store, status="READY")
+    output = tmp_path / job_id / "media.mp4"
+    output.parent.mkdir()
+    output.write_bytes(b"media")
+    fake_store.hset(dlp.job_key(job_id), mapping={"filename": output.name, "mime": "video/mp4", "size": "5"})
+
+    with TestClient(dlp.app) as client:
+        response = client.get(
+            f"/v2/jobs/{job_id}/file",
+            headers={
+                "x-dlp-service-token": TOKEN,
+                "x-job-owner": OWNER_B,
+                "Range": "bytes=0-1",
+            },
+        )
+
+    assert response.status_code == 404

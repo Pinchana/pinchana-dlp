@@ -27,8 +27,9 @@ API_URL = os.environ.get("DLP_API_URL", "http://dlp-api:8080").rstrip("/")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output"))
 COOKIE_DIR = Path("/run/cookies")
 PROXY_URL = os.environ.get("VPN_PROXY_URL", "")
-EXECUTION_TIMEOUT = int(os.environ.get("EXECUTION_TIMEOUT_SECONDS", "900"))
-MAX_OUTPUT_BYTES = int(os.environ.get("MAX_OUTPUT_BYTES", str(2 * 1024 * 1024 * 1024)))
+EXECUTION_TIMEOUT = int(os.environ.get("EXECUTION_TIMEOUT_SECONDS", "2700"))
+MAX_OUTPUT_BYTES = int(os.environ.get("MAX_OUTPUT_BYTES", str(8 * 1024 * 1024 * 1024)))
+MAX_WORK_BYTES = int(os.environ.get("MAX_WORK_BYTES", str(MAX_OUTPUT_BYTES * 2 + 512 * 1024 * 1024)))
 
 QUALITY_HEIGHTS = {
     "best": None,
@@ -328,6 +329,8 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
         "--no-write-thumbnail",
         "--no-write-info-json",
         "--restrict-filenames",
+        "--max-filesize",
+        str(MAX_OUTPUT_BYTES),
         "--js-runtimes",
         "deno:/usr/local/bin/deno",
         "--format",
@@ -391,8 +394,8 @@ def execute(payload: dict[str, object], cookies_path: Path | None) -> Path:
         while proc.poll() is None:
             if time.monotonic() >= deadline:
                 raise TimeoutError("Download exceeded the execution time limit")
-            if output_size() > MAX_OUTPUT_BYTES:
-                raise ValueError("Download exceeded the output size limit")
+            if output_size() > MAX_WORK_BYTES:
+                raise ValueError("Download exceeded the temporary workspace limit")
             for key, _ in selector.select(timeout=0.5):
                 line = key.fileobj.readline()
                 if not line:

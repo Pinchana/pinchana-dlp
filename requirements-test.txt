@@ -1,4 +1,5 @@
 -r api/requirements.txt
 -r worker/requirements.txt
 fakeredis==2.31.0
+httpx==0.28.1
 pytest==8.4.1
