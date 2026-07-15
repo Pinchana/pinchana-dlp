@@ -41,6 +41,7 @@ YOUTUBE_DUB_LANGUAGES = (
     "te", "kn", "ml", "si", "th", "lo", "my", "ka", "am", "km", "zh-CN", "zh-TW", "zh-HK",
     "ja", "ko",
 )
+FILENAME_STYLES = ("classic", "basic", "pretty", "nerdy")
 YOUTUBE_HOSTS = {"youtube.com", "youtu.be"}
 AUDIO_FORMATS = ("best", "mp3", "ogg", "wav", "opus")
 AUDIO_BITRATES = ("320", "256", "128", "96", "64", "8")
@@ -155,6 +156,8 @@ class SubmitRequest(BaseModel):
     audioBitrate: Literal["320", "256", "128", "96", "64", "8"] = "128"
     preferBetterAudio: bool = False
     dubLanguage: str = Field(default="original", min_length=2, max_length=16)
+    filenameStyle: Literal["classic", "basic", "pretty", "nerdy"] = "pretty"
+    subtitleLanguage: str = Field(default="none", min_length=2, max_length=16)
     cookiesEnc: CookiesEnvelope | None = None
 
     @field_validator("dubLanguage")
@@ -162,6 +165,13 @@ class SubmitRequest(BaseModel):
     def valid_dub_language(cls, value: str) -> str:
         if value != "original" and value not in YOUTUBE_DUB_LANGUAGES:
             raise ValueError("unsupported YouTube dub language")
+        return value
+
+    @field_validator("subtitleLanguage")
+    @classmethod
+    def valid_subtitle_language(cls, value: str) -> str:
+        if value != "none" and value not in YOUTUBE_DUB_LANGUAGES:
+            raise ValueError("unsupported YouTube subtitle language")
         return value
 
 
@@ -375,6 +385,8 @@ def health() -> dict[str, Any]:
             "audioFormats": list(AUDIO_FORMATS),
             "audioBitrates": list(AUDIO_BITRATES),
             "dubLanguages": list(YOUTUBE_DUB_LANGUAGES),
+            "filenameStyles": list(FILENAME_STYLES),
+            "subtitleLanguages": list(YOUTUBE_DUB_LANGUAGES),
             "betterAudio": True,
         },
     }

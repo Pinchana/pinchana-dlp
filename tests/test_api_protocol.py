@@ -137,6 +137,16 @@ def test_anonymous_submission_is_one_time_and_has_fixed_quality(fake_store, monk
         dlp.SubmitRequest(url=request.url, audioBitrate="192")
     with pytest.raises(ValidationError):
         dlp.SubmitRequest(url=request.url, dubLanguage="not-a-language")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, filenameStyle="random")
+    with pytest.raises(ValidationError):
+        dlp.SubmitRequest(url=request.url, subtitleLanguage="not-a-language")
+
+
+def test_health_advertises_naming_and_subtitle_capabilities():
+    capabilities = dlp.health()["capabilities"]
+    assert capabilities["filenameStyles"] == ["classic", "basic", "pretty", "nerdy"]
+    assert "en" in capabilities["subtitleLanguages"]
 
 
 def test_redis_payload_contains_ciphertext_but_not_plaintext_marker(fake_store, monkeypatch):

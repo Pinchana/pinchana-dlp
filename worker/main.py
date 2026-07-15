@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import requests
@@ -71,6 +72,9 @@ AUDIO_MIME_TYPES = {
     ".wav": "audio/wav",
     ".webm": "audio/webm",
 }
+FILENAME_STYLES = {"classic", "basic", "pretty", "nerdy"}
+BRAND_MARK = "[pinchana.cc]"
+MAX_FILENAME_BYTES = 240
 
 
 def b64d(value: str) -> bytes:
@@ -136,6 +140,94 @@ def sanitize_error(value: str) -> str:
     value = re.sub(r"/run/cookies/\S+", "/run/cookies/<redacted>", value)
     value = re.sub(r"/output/\S+", "/output/<file>", value)
     return value[:500]
+
+
+def clean_filename_part(value: object, fallback: str = "") -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    return text or fallback
+
+
+def machine_filename_part(value: object, fallback: str = "") -> str:
+    text = clean_filename_part(value, fallback)
+    text = re.sub(r"[^\w.-]+", "_", text, flags=re.UNICODE).strip("._-")
+    return text or fallback
+
+
+def codec_label(metadata: dict[str, object], payload: dict[str, object], *, machine: bool = False) -> str:
+    raw = str(metadata.get("vcodec") or payload.get("codec") or "").lower()
+    if raw in {"", "none", "auto", "na"}:
+        return ""
+    if raw.startswith(("avc", "h264")):
+        return "h264" if machine else "H.264"
+    if raw.startswith(("av01", "av1")):
+        return "av1" if machine else "AV1"
+    if raw.startswith(("vp09", "vp9")):
+        return "vp9" if machine else "VP9"
+    return machine_filename_part(raw) if machine else clean_filename_part(raw)
+
+
+def truncate_utf8(value: str, maximum: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= maximum:
+        return value
+    return encoded[:maximum].decode("utf-8", errors="ignore").rstrip(" ._-")
+
+
+def branded_filename(base: str, extension: str, *, machine: bool = False) -> str:
+    extension = machine_filename_part(extension.lower(), "bin")
+    separator = "_" if machine else " "
+    suffix = f"{separator}{BRAND_MARK}.{extension}"
+    prefix = clean_filename_part(base, "media")
+    maximum = MAX_FILENAME_BYTES - len(suffix.encode("utf-8"))
+    prefix = truncate_utf8(prefix, maximum) or "media"
+    return f"{prefix}{suffix}"
+
+
+def build_filename(metadata: dict[str, object], payload: dict[str, object], extension: str) -> str:
+    style = str(payload.get("filenameStyle", "pretty"))
+    if style not in FILENAME_STYLES:
+        raise ValueError("unsupported filename style")
+    video_id = clean_filename_part(metadata.get("id"), "video")
+    title = clean_filename_part(metadata.get("title"), video_id)
+    author = clean_filename_part(
+        metadata.get("uploader") or metadata.get("channel") or metadata.get("artist")
+    )
+    human = " - ".join(part for part in (title, author) if part)
+    audio_only = str(payload.get("quality", "best")) == "audio"
+    height = metadata.get("height")
+    quality = f"{int(height)}p" if isinstance(height, (int, float)) and height > 0 else ""
+    resolution = clean_filename_part(metadata.get("resolution"))
+    if not resolution and quality:
+        resolution = quality
+
+    if style == "classic":
+        parts = ["youtube", machine_filename_part(video_id, "video")]
+        if audio_only:
+            parts.append("audio")
+        else:
+            if resolution:
+                parts.append(machine_filename_part(resolution))
+            codec = codec_label(metadata, payload, machine=True)
+            if codec:
+                parts.append(codec)
+        return branded_filename("_".join(parts), extension, machine=True)
+
+    if style == "basic":
+        return branded_filename(human, extension)
+
+    details: list[str] = []
+    if not audio_only:
+        if quality:
+            details.append(quality)
+        codec = codec_label(metadata, payload)
+        if codec:
+            details.append(codec)
+    details.append("youtube")
+    if style == "nerdy":
+        details.append(video_id)
+    return branded_filename(f"{human} ({', '.join(details)})", extension)
 
 
 session = requests.Session()
@@ -221,6 +313,7 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
     audio_format = str(payload.get("audioFormat", "best"))
     audio_bitrate = str(payload.get("audioBitrate", "128"))
     dub_language = str(payload.get("dubLanguage", "original"))
+    subtitle_language = str(payload.get("subtitleLanguage", "none"))
     if audio_format not in AUDIO_FORMATS:
         raise ValueError("unsupported audio format")
     if audio_bitrate not in AUDIO_BITRATES:
@@ -241,6 +334,9 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
         format_selector(quality, codec, dub_language),
         "--output",
         str(OUTPUT_DIR / "media.%(ext)s"),
+        "--print-to-file",
+        "after_move:%()j",
+        str(OUTPUT_DIR / ".metadata.json"),
     ]
     selected_container = output_container(codec, container, quality)
     if selected_container:
@@ -251,6 +347,18 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
         command.extend(["--extract-audio", "--audio-format", AUDIO_FORMAT_ARGUMENTS[audio_format]])
         if audio_format in {"mp3", "ogg", "opus"}:
             command.extend(["--audio-quality", f"{audio_bitrate}K"])
+    if quality != "audio" and subtitle_language != "none":
+        if subtitle_language not in YOUTUBE_DUB_LANGUAGES:
+            raise ValueError("unsupported subtitle language")
+        command.extend([
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs",
+            subtitle_language,
+            "--embed-subs",
+            "--compat-options",
+            "no-keep-subs",
+        ])
     if cookies_path:
         command.extend(["--cookies", str(cookies_path)])
     if PROXY_URL:
@@ -261,6 +369,8 @@ def build_command(payload: dict[str, object], cookies_path: Path | None) -> list
 
 def execute(payload: dict[str, object], cookies_path: Path | None) -> Path:
     command = build_command(payload, cookies_path)
+    metadata_path = OUTPUT_DIR / ".metadata.json"
+    metadata_path.unlink(missing_ok=True)
 
     proc = subprocess.Popen(
         command,
@@ -299,12 +409,26 @@ def execute(payload: dict[str, object], cookies_path: Path | None) -> Path:
         raise
     if proc.returncode:
         raise RuntimeError(f"yt-dlp failed ({proc.returncode}): {' | '.join(last_lines)}")
+    metadata: dict[str, object] = {}
+    if metadata_path.is_file():
+        try:
+            lines = [line for line in metadata_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if lines:
+                parsed = json.loads(lines[-1])
+                if isinstance(parsed, dict):
+                    metadata = parsed
+        finally:
+            metadata_path.unlink(missing_ok=True)
     files = [path for path in OUTPUT_DIR.iterdir() if path.is_file()]
     if len(files) != 1:
         raise RuntimeError("Download produced an unexpected number of files")
     if files[0].stat().st_size > MAX_OUTPUT_BYTES:
         raise ValueError("Download exceeded the output size limit")
-    return files[0]
+    output = files[0]
+    final_name = build_filename(metadata, payload, output.suffix.lstrip("."))
+    final_output = output.with_name(final_name)
+    output.replace(final_output)
+    return final_output
 
 
 def run() -> None:

@@ -130,6 +130,64 @@ def test_best_audio_keeps_source_without_conversion(monkeypatch, tmp_path):
     assert "--audio-quality" not in command
 
 
+def test_video_subtitles_prefer_manual_then_auto_and_embed(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "OUTPUT_DIR", tmp_path)
+    command = worker.build_command({
+        "url": "https://youtu.be/abcdefghijk",
+        "quality": "1080p",
+        "subtitleLanguage": "en",
+    }, None)
+    assert "--write-subs" in command
+    assert "--write-auto-subs" in command
+    assert command[command.index("--sub-langs") + 1] == "en"
+    assert "--embed-subs" in command
+    assert command[command.index("--compat-options") + 1] == "no-keep-subs"
+
+
+def test_audio_ignores_subtitle_preference(monkeypatch, tmp_path):
+    monkeypatch.setattr(worker, "OUTPUT_DIR", tmp_path)
+    command = worker.build_command({
+        "url": "https://youtu.be/abcdefghijk",
+        "quality": "audio",
+        "subtitleLanguage": "en",
+    }, None)
+    assert "--write-subs" not in command
+    assert "--embed-subs" not in command
+
+
+@pytest.mark.parametrize(("style", "quality", "expected"), [
+    ("classic", "1080p", "youtube_dQw4w9WgXcQ_1920x1080_h264_[pinchana.cc].mp4"),
+    ("basic", "1080p", "Video Title - Video Author [pinchana.cc].mp4"),
+    ("pretty", "1080p", "Video Title - Video Author (1080p, H.264, youtube) [pinchana.cc].mp4"),
+    ("nerdy", "1080p", "Video Title - Video Author (1080p, H.264, youtube, dQw4w9WgXcQ) [pinchana.cc].mp4"),
+    ("pretty", "audio", "Video Title - Video Author (youtube) [pinchana.cc].mp3"),
+])
+def test_branded_filename_styles(style, quality, expected):
+    metadata = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Video Title",
+        "uploader": "Video Author",
+        "height": 1080,
+        "resolution": "1920x1080",
+        "vcodec": "avc1.640028",
+    }
+    extension = "mp3" if quality == "audio" else "mp4"
+    assert worker.build_filename(metadata, {"filenameStyle": style, "quality": quality}, extension) == expected
+
+
+def test_filename_sanitization_preserves_brand_and_byte_limit():
+    name = worker.build_filename({
+        "id": "id",
+        "title": "猫 / " * 200,
+        "uploader": 'Author: <bad>|name',
+        "height": 720,
+        "vcodec": "vp09.00.51.08",
+    }, {"filenameStyle": "pretty", "quality": "720p"}, "mp4")
+    assert len(name.encode("utf-8")) <= worker.MAX_FILENAME_BYTES
+    assert name.endswith("[pinchana.cc].mp4")
+    assert not any(character in name for character in '<>:"/\\|?*')
+
+
 def test_run_removes_plaintext_cookie_file_and_wipes_buffer(monkeypatch, tmp_path):
     cookie_dir = tmp_path / "cookies"
     output_dir = tmp_path / "output"

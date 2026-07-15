@@ -11,7 +11,7 @@ The trusted gateway authenticates with `x-dlp-service-token` and supplies an opa
 - a 12-byte AES-GCM IV; and
 - ciphertext authenticated with `pinchana-dlp:v2:{jobId}:{keyId}`.
 
-Anonymous submissions omit `cookiesEnc`; the worker runs yt-dlp without `--cookies`. DLP accepts YouTube hosts only. Quality, video codec, container, audio format/bitrate, better-audio preference, and dubbed language are validated fixed options; callers cannot provide a yt-dlp format string. Codec and dubbed-track selection fall back safely, explicit video containers are remuxed without transcoding, and audio conversion is handled by the pinned worker FFmpeg.
+Anonymous submissions omit `cookiesEnc`; the worker runs yt-dlp without `--cookies`. DLP accepts YouTube hosts only. Quality, video codec, container, audio format/bitrate, better-audio preference, dubbed language, subtitle language, and filename style are validated fixed options; callers cannot provide a yt-dlp format string or output template. Codec and dubbed-track selection fall back safely, selected subtitles prefer creator captions with automatic captions as fallback, explicit video containers are remuxed without transcoding, and audio conversion is handled by the pinned worker FFmpeg. Completed files use one of the advertised branded filename styles and always retain `[pinchana.cc]`.
 
 Gateway routes:
 
