@@ -35,11 +35,17 @@ The official defaults allow three concurrent workers, an 8 GiB final artifact, a
 
 ## Development
 
-Copy `example.env` to `.env`, replace every secret and absolute host path, then run:
+The standalone Compose stack is for component development. Production uses the `dlp` profile from the `pinchana-api` repository so the gateway, image pins, private networks, and feature flag are validated together.
+
+Copy `example.env` to `.env`, protect it, replace every secret and absolute host path, and validate the rendered configuration before starting services:
 
 ```sh
-docker compose --profile build build worker-image
-docker compose up --build redis dlp-api vpn orchestrator
+cp example.env .env
+chmod 600 .env
+docker compose --env-file .env --profile build config --quiet
+docker compose --env-file .env --profile build build worker-image
+docker compose --env-file .env up --detach --build redis dlp-api vpn orchestrator
+docker compose --env-file .env ps
 ```
 
 Run protocol tests, including the Node WebCrypto to Python cross-language vector:
